@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>acousto_control_start</name>
+  <version>0.0.1</version>
+  <description>Subscribe to a start flag and trigger an acousto-control routine.</description>
+  <maintainer email="you@example.com">Your Name</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

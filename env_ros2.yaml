@@ -1,0 +1,18 @@
+name: roboacoustic2
+channels:
+- conda-forge
+- robostack-staging
+dependencies:
+- python
+- pip
+- numpy
+- matplotlib
+- rospkg
+- urdfdom
+- ros-humble-ros-base
+- cmake
+- pkg-config
+- make
+- ninja
+- colcon-common-extensions
+- compilers 
