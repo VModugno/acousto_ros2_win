@@ -24,7 +24,7 @@ set(PKG_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src")
 set(EXTRA_GSPAT_HEADERS "${PKG_SRC}/GSPAT_Solver")
 
 # --- vcpkg root/triplet hints (so we don't assume C:/tools/vcpkg) ------------
-set(VCPKG_ROOT "" CACHE PATH "Path to your vcpkg root (folder containing vcpkg.exe)")
+set(VCPKG_ROOT "C:/Users/RoboH/vcpkg" CACHE PATH "Path to your vcpkg root")
 if(NOT VCPKG_ROOT AND DEFINED ENV{VCPKG_ROOT})
   set(VCPKG_ROOT "$ENV{VCPKG_ROOT}")
 endif()
@@ -148,7 +148,7 @@ target_include_directories(acousto_control_node PRIVATE
   "${PKG_SRC}/GSPAT_SolverV2/include"
   "${EXTRA_GSPAT_HEADERS}")
 ament_target_dependencies(acousto_control_node rclcpp std_msgs)
-target_link_libraries(acousto_control_node PRIVATE
+target_link_libraries(acousto_control_node
   AsierInhoUDP
   AsierInhoSerial
   GSPAT_SolverV2)
