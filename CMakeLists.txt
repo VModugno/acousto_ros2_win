@@ -1,13 +1,12 @@
 cmake_minimum_required(VERSION 3.16)
 project(acousto_control_start)
 
-# --- C++ & MSVC runtime (Release => /MD, Debug => /MDd) -----------------------
+# --- C++ & MSVC runtime -------------------------------------------------------
 if(NOT CMAKE_CXX_STANDARD)
   set(CMAKE_CXX_STANDARD 17)
 endif()
 if(MSVC)
   add_compile_options(/W4)
-  # Ensure Release uses the non-D CRT (no *D.dll)
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>DLL")
 else()
   add_compile_options(-Wall -Wextra -Wpedantic)
@@ -20,32 +19,23 @@ find_package(std_msgs REQUIRED)
 
 # --- Layout -------------------------------------------------------------------
 set(PKG_SRC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-# Some GSPAT headers may live here; keep if your code includes from it
-set(EXTRA_GSPAT_HEADERS "${PKG_SRC}/GSPAT_Solver")
+set(EXTRA_GSPAT_HEADERS "${PKG_SRC}/GSPAT_Solver")  # common interface headers if used
 
-# --- vcpkg root/triplet hints (so we don't assume C:/tools/vcpkg) ------------
+# --- vcpkg hints --------------------------------------------------------------
 set(VCPKG_ROOT "C:/Users/RoboH/vcpkg" CACHE PATH "Path to your vcpkg root")
-if(NOT VCPKG_ROOT AND DEFINED ENV{VCPKG_ROOT})
-  set(VCPKG_ROOT "$ENV{VCPKG_ROOT}")
-endif()
-set(VCPKG_TRIPLET "$ENV{VCPKG_TARGET_TRIPLET}")
-if(NOT VCPKG_TRIPLET OR VCPKG_TRIPLET STREQUAL "")
-  set(VCPKG_TRIPLET "x64-windows")
-endif()
+set(VCPKG_TRIPLET "x64-windows" CACHE STRING "vcpkg triplet")
 
-# --- Third-party deps from conda (OpenCL, clBLAS, pthreads) -------------------
-# Conda installs typically land in %CONDA_PREFIX%/Library/{include,lib,bin}
+# --- Deps: OpenCL & clBLAS from conda; pthread via vcpkg (fallback to .lib) ---
 if(WIN32)
-  # OpenCL (from khronos-opencl-icd-loader + opencl-headers)
+  # OpenCL
   find_package(OpenCL QUIET)
   if(NOT OpenCL_FOUND)
-    # Fallback: construct an imported target from conda paths
     find_library(OPENCL_LIBRARY NAMES OpenCL
       HINTS "$ENV{CONDA_PREFIX}/Library/lib" "$ENV{CONDA_PREFIX}/lib")
     find_path(OPENCL_INCLUDE_DIR CL/cl.h
       HINTS "$ENV{CONDA_PREFIX}/Library/include" "$ENV{CONDA_PREFIX}/include")
     if(NOT OPENCL_LIBRARY OR NOT OPENCL_INCLUDE_DIR)
-      message(FATAL_ERROR "OpenCL not found. Install khronos-opencl-icd-loader + opencl-headers in the conda env.")
+      message(FATAL_ERROR "OpenCL not found in conda env.")
     endif()
     add_library(OpenCL::OpenCL UNKNOWN IMPORTED)
     set_target_properties(OpenCL::OpenCL PROPERTIES
@@ -57,105 +47,101 @@ if(WIN32)
   find_library(CLBLAS_LIBRARY NAMES clBLAS
     HINTS "$ENV{CONDA_PREFIX}/Library/lib" "$ENV{CONDA_PREFIX}/lib")
   if(NOT CLBLAS_LIBRARY)
-    message(FATAL_ERROR "clBLAS.lib not found. Install clblas in the conda env.")
+    message(FATAL_ERROR "clBLAS.lib not found in conda env.")
   endif()
 
-  # --- PTHREADS via vcpkg (or fallback to a .lib) ----------------------------
+  # pthreads (prefer vcpkg)
   set(PTHREAD_LIB_TARGET "")
-  set(_VCPKG_HINTS "")
-  if(VCPKG_ROOT)
-    list(APPEND _VCPKG_HINTS
-      "${VCPKG_ROOT}/installed/${VCPKG_TRIPLET}"
-      "${VCPKG_ROOT}/installed/x64-windows")
-  endif()
-  # Prefer the vcpkg config package/target
-  find_package(pthreads CONFIG QUIET HINTS ${_VCPKG_HINTS})
+  find_package(pthreads CONFIG QUIET
+               HINTS "${VCPKG_ROOT}/installed/${VCPKG_TRIPLET}"
+                     "${VCPKG_ROOT}/installed/x64-windows")
   if(TARGET PThreads4W::PThreads4W)
     set(PTHREAD_LIB_TARGET PThreads4W::PThreads4W)
   else()
-    # Fallback: search for a classic import lib
     find_library(PTHREAD_LIBRARY NAMES pthreadVC3 pthreadVC2 pthread
-      HINTS
-        "$ENV{CONDA_PREFIX}/Library/lib" "$ENV{CONDA_PREFIX}/lib"
-        "${VCPKG_ROOT}/installed/${VCPKG_TRIPLET}/lib"
-        "${VCPKG_ROOT}/installed/x64-windows/lib")
+      HINTS "${VCPKG_ROOT}/installed/${VCPKG_TRIPLET}/lib"
+            "${VCPKG_ROOT}/installed/x64-windows/lib"
+            "$ENV{CONDA_PREFIX}/Library/lib" "$ENV{CONDA_PREFIX}/lib")
     if(NOT PTHREAD_LIBRARY)
-      message(FATAL_ERROR "pthreads not found. Either install via vcpkg (pthreads:x64-windows) and pass -DCMAKE_TOOLCHAIN_FILE=\"<vcpkg>/scripts/buildsystems/vcpkg.cmake\", or pass -DPTHREAD_LIBRARY=<path to pthreadVC*.lib>.")
+      message(FATAL_ERROR "pthreads not found (install via vcpkg or pass -DPTHREAD_LIBRARY=...).")
     endif()
     set(PTHREAD_LIB_TARGET "${PTHREAD_LIBRARY}")
   endif()
-  # ---------------------------------------------------------------------------
 
-  # Winsock for UDP
-  set(WS2_32_LIBRARY "ws2_32.lib")
+  set(WS2_32_LIBRARY ws2_32)
 else()
   find_package(Threads REQUIRED)
   find_package(OpenCL REQUIRED)
-  find_library(CLBLAS_LIBRARY NAMES clBLAS)
-  if(NOT CLBLAS_LIBRARY)
-    message(FATAL_ERROR "clBLAS not found.")
-  endif()
+  find_library(CLBLAS_LIBRARY NAMES clBLAS REQUIRED)
 endif()
 
-# --- Build vendor DLLs from source --------------------------------------------
-# Note: for MSVC, CMake auto-defines <target>_EXPORTS for SHARED libs (dllexport guards).
+# ===== Build libraries exactly like VS ========================================
 
-# 1) AsierInhoSerial (DLL)
-file(GLOB_RECURSE ASIERINHOSERIAL_SOURCES
-  "${PKG_SRC}/AsierInhoSerial/src/*.c"
-  "${PKG_SRC}/AsierInhoSerial/src/*.cpp")
-add_library(AsierInhoSerial SHARED ${ASIERINHOSERIAL_SOURCES})
-target_include_directories(AsierInhoSerial PUBLIC
-  "${PKG_SRC}/AsierInhoSerial/include")
-if(WIN32)
-  target_link_libraries(AsierInhoSerial PRIVATE "${PTHREAD_LIB_TARGET}")
-else()
-  target_link_libraries(AsierInhoSerial PRIVATE Threads::Threads)
-endif()
-
-# 2) AsierInhoUDP (DLL)
-file(GLOB_RECURSE ASIERINHOUDP_SOURCES
-  "${PKG_SRC}/AsierInhoUDP/src/*.c"
-  "${PKG_SRC}/AsierInhoUDP/src/*.cpp")
-add_library(AsierInhoUDP SHARED ${ASIERINHOUDP_SOURCES})
+# AsierInhoUDP library WITHOUT UDPDriver.cpp (that one is compiled into the node)
+add_library(AsierInhoUDP SHARED
+  "${PKG_SRC}/AsierInhoUDP/src/AsierInhoUDP.cpp"
+  "${PKG_SRC}/AsierInhoUDP/src/AsierInhoUDP_CWrapper.cpp"
+  "${PKG_SRC}/AsierInhoUDP/src/AsierInhoUDPImpl.cpp"
+)
 target_include_directories(AsierInhoUDP PUBLIC
-  "${PKG_SRC}/AsierInhoUDP/include")
+  "${PKG_SRC}/AsierInhoUDP/include"
+  "${PKG_SRC}/AsierInhoUDP/src"      # for AsierInhoUDPImpl.h
+)
 if(WIN32)
-  target_link_libraries(AsierInhoUDP PRIVATE "${PTHREAD_LIB_TARGET}" "${WS2_32_LIBRARY}")
+  target_link_libraries(AsierInhoUDP PRIVATE ${PTHREAD_LIB_TARGET} ${WS2_32_LIBRARY})
 else()
   target_link_libraries(AsierInhoUDP PRIVATE Threads::Threads)
 endif()
 
-# 3) GSPAT_SolverV2 (DLL)
-file(GLOB_RECURSE GSPATV2_SOURCES
-  "${PKG_SRC}/GSPAT_SolverV2/src/*.c"
-  "${PKG_SRC}/GSPAT_SolverV2/src/*.cpp")
-add_library(GSPAT_SolverV2 SHARED ${GSPATV2_SOURCES})
+# GSPAT_SolverV2 library (compile the core .cpp files)
+add_library(GSPAT_SolverV2 SHARED
+  "${PKG_SRC}/GSPAT_SolverV2/src/GSPAT_SolverV2.cpp"
+  "${PKG_SRC}/GSPAT_SolverV2/src/GSPATV2_CWrapper.cpp"
+  "${PKG_SRC}/GSPAT_SolverV2/src/HologramProfiler.cpp"
+  "${PKG_SRC}/GSPAT_SolverV2/src/HologramSolution.cpp"
+  "${PKG_SRC}/GSPAT_SolverV2/src/HologramSolverCL.cpp"
+  "${PKG_SRC}/GSPAT_SolverV2/src/SolutionPool.cpp"
+)
 target_include_directories(GSPAT_SolverV2 PUBLIC
   "${PKG_SRC}/GSPAT_SolverV2/include"
-  "${EXTRA_GSPAT_HEADERS}")
+  "${EXTRA_GSPAT_HEADERS}"
+)
 if(WIN32)
-  target_link_libraries(GSPAT_SolverV2 PRIVATE OpenCL::OpenCL "${CLBLAS_LIBRARY}" "${PTHREAD_LIB_TARGET}")
+  target_link_libraries(GSPAT_SolverV2 PRIVATE OpenCL::OpenCL ${CLBLAS_LIBRARY} ${PTHREAD_LIB_TARGET})
 else()
-  target_link_libraries(GSPAT_SolverV2 PRIVATE OpenCL::OpenCL "${CLBLAS_LIBRARY}" Threads::Threads)
+  target_link_libraries(GSPAT_SolverV2 PRIVATE OpenCL::OpenCL ${CLBLAS_LIBRARY} Threads::Threads)
 endif()
 
-# --- ROS 2 node ---------------------------------------------------------------
-add_executable(acousto_control_node "${PKG_SRC}/acousto_control.cpp")
+# ===== ROS 2 node (replicates WirelessBoard exe composition) ==================
+# Compile these vendor sources directly into the node, like VS:
+set(EMBEDDED_VENDOR_SRCS
+  "${PKG_SRC}/AsierInhoSerial/src/COMToolkit2.cpp"
+  "${PKG_SRC}/AsierInhoUDP/src/UDPDriver.cpp"
+)
+
+add_executable(acousto_control_node
+  "${PKG_SRC}/acousto_control.cpp"
+  ${EMBEDDED_VENDOR_SRCS}
+)
 target_include_directories(acousto_control_node PRIVATE
+  "${PKG_SRC}/AsierInhoSerial/src"   # COMToolkit2.h lives here
   "${PKG_SRC}/AsierInhoUDP/include"
-  "${PKG_SRC}/AsierInhoSerial/include"
+  "${PKG_SRC}/AsierInhoUDP/src"      # UDPDriver.h, Impl headers
   "${PKG_SRC}/GSPAT_SolverV2/include"
-  "${EXTRA_GSPAT_HEADERS}")
+  "${EXTRA_GSPAT_HEADERS}"
+)
 ament_target_dependencies(acousto_control_node rclcpp std_msgs)
+
+# Use the PLAIN signature to avoid mixed-signature errors
 target_link_libraries(acousto_control_node
   AsierInhoUDP
-  AsierInhoSerial
-  GSPAT_SolverV2)
+  GSPAT_SolverV2
+  ${PTHREAD_LIB_TARGET}
+  ${WS2_32_LIBRARY}
+)
 
-# --- Install: node + our DLLs -------------------------------------------------
+# ===== Install ================================================================
 install(TARGETS
-  AsierInhoSerial
   AsierInhoUDP
   GSPAT_SolverV2
   RUNTIME DESTINATION bin
@@ -166,26 +152,30 @@ install(TARGETS acousto_control_node
   LIBRARY DESTINATION lib
   ARCHIVE DESTINATION lib)
 
-# Also install runtime DLLs so the node runs without PATH tweaks
+# Install OpenCL kernels used by the solver
+file(GLOB _gspat_kernels "${PKG_SRC}/GSPAT_SolverV2/src/*.cl")
+if(_gspat_kernels)
+  install(FILES ${_gspat_kernels} DESTINATION bin)
+endif()
+
+# Also install runtime DLLs so the node runs without PATH edits
 if(WIN32)
   set(_runtime_copy "")
   set(CONDA_BIN "$ENV{CONDA_PREFIX}/Library/bin")
-  if(EXISTS "${CONDA_BIN}/clBLAS.dll")
-    list(APPEND _runtime_copy "${CONDA_BIN}/clBLAS.dll")
-  endif()
-  if(EXISTS "${CONDA_BIN}/OpenCL.dll")
-    list(APPEND _runtime_copy "${CONDA_BIN}/OpenCL.dll")
-  endif()
-  # Try vcpkg pthread DLLs first, then conda's pthreadVC2.dll
+  foreach(_dll IN ITEMS
+      "${CONDA_BIN}/clBLAS.dll"
+      "${CONDA_BIN}/OpenCL.dll")
+    if(EXISTS "${_dll}")
+      list(APPEND _runtime_copy "${_dll}")
+    endif()
+  endforeach()
   if(VCPKG_ROOT AND EXISTS "${VCPKG_ROOT}/installed/${VCPKG_TRIPLET}/bin")
     file(GLOB _vcpkg_pthr "${VCPKG_ROOT}/installed/${VCPKG_TRIPLET}/bin/pthreadVC*.dll")
     list(APPEND _runtime_copy ${_vcpkg_pthr})
-  endif()
-  if(EXISTS "${CONDA_BIN}/pthreadVC2.dll")
-    list(APPEND _runtime_copy "${CONDA_BIN}/pthreadVC2.dll")
   endif()
   if(_runtime_copy)
     install(FILES ${_runtime_copy} DESTINATION bin)
   endif()
 endif()
+
 ament_package()
